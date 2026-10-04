@@ -1,0 +1,551 @@
+\documentclass{article}
+
+% Language setting
+\usepackage{datatool}
+\usepackage[ngerman]{babel}
+\usepackage{tabto}
+% Set page size and margins
+\usepackage[letterpaper,top=2cm,bottom=2cm,left=2.5cm,right=2.5cm,marginparwidth=1.75cm]{geometry}
+
+% Useful packages
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+\usepackage{placeins}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{csquotes}
+
+\lstdefinestyle{arduino}{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    columns=fullflexible,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray}
+}
+
+\title{Mobile Tastatur \\[0.2em] 10-Tasten-Edition
+\normalsize\\[0.5em] Softwarepraxis \& Vertiefungsprojekt IT, Fortsetzungsprojekt, Prof.\ Dr.\ rer.\ nat.\ Gerwinsiki}
+
+\author{Lennart Langer}
+\date{24.~September 2026}
+
+\usepackage[acronym]{glossaries}
+\makeglossaries
+\setglossarystyle{list}
+
+\newglossaryentry{usb-hid}{
+    name=USB-HID,
+    description={Universal Serial Bus -- Human Interface Device, ein Standard für Eingabegeräte wie Tastaturen oder Mäuse}
+}
+\newglossaryentry{FIFO}{
+    name=FIFO,
+    description={First In, First Out, ein Prinzip zur Verwaltung von Daten in einer Warteschlange}
+}
+
+\newglossaryentry{isr}{
+    name=ISR,
+    description={Interrupt Service Routine, eine Funktion, die beim Auslösen eines Hardware-Interrupts automatisch ausgeführt wird}
+}
+
+\newglossaryentry{propriozeption}{
+    name=Propriozeption,
+    description={Wahrnehmung der eigenen Körperposition und Bewegung, z.\,B. Lage der Finger im Raum}
+}
+
+\newglossaryentry{ringpuffer}{
+    name=Ringpuffer,
+    description={Eine Datenstruktur, die Elemente in einem kreisförmigen Puffer speichert und wiedergibt. Ist der Puffer voll, werden je nach Implementierung neue oder alte Einträge verworfen}
+}
+
+\newglossaryentry{prellen}{
+    name=Prellen,
+    description={Mechanisches Nachschwingen eines Tasterkontakts beim Schließen oder Öffnen, wodurch kurzzeitig mehrere elektrische Impulse statt eines einzelnen Signals entstehen}
+}
+
+\newglossaryentry{gnd}{
+    name=GND,
+    text=GND,
+    description={Masse: Bezugspotential der Schaltung (0\,V). Ein Stromkreis ist erst geschlossen, wenn er zu GND zurückführt; beim Arduino ist GND der Minuspol der Spannungsversorgung}
+}
+
+\newglossaryentry{pullup}{
+    name=Pull-up-Widerstand,
+    description={Ein Widerstand, der einen Eingang im unbetätigten Zustand definiert auf ein High-Signal zieht; beim Arduino intern über \texttt{INPUT\_PULLUP} aktivierbar, sodass ein Tastendruck den Pin stattdessen auf Low zieht}
+}
+
+\newglossaryentry{portregister}{
+    name=PORT-Register,
+    description={Register eines Mikrocontrollers (z.\,B. \texttt{PINB}, \texttt{PIND}), über das der aktuelle logische Zustand mehrerer Pins gleichzeitig als ein Byte ausgelesen werden kann}
+}
+
+\newglossaryentry{hidreport}{
+    name=HID-Report-Deskriptor,
+    description={Eine vom USB-HID-Gerät beim Verbindungsaufbau übermittelte Beschreibung, die dem Host-Betriebssystem mitteilt, wie die nachfolgend gesendeten Datenpakete (Reports) aufgebaut sind und zu interpretieren sind}
+}
+
+\newglossaryentry{scancode}{
+    name=Scancode,
+    description={Ein von einer Tastatur übertragener Code, der die physische Position einer gedrückten Taste beschreibt -- unabhängig davon, welches Zeichen auf der Tastenkappe aufgedruckt ist oder welches Zeichen das Betriebssystem letztlich daraus erzeugt}
+}
+
+\newglossaryentry{bootprotokoll}{
+    name=Boot-Protokoll,
+    description={Ein in der USB-HID-Spezifikation fest vorgegebenes, stark vereinfachtes Report-Format für Tastaturen und Mäuse, das auch einfache Umgebungen wie ein BIOS/UEFI ohne Kenntnis des individuellen HID-Report-Deskriptors korrekt interpretieren können}
+}
+
+\begin{document}
+\maketitle
+\begin{center}
+    Matr.-Nr. 018363935\\
+    Studiengang: KIA Angewandte Informatik\\
+    Hochschule Bochum - Campus Velbert Heiligenhaus
+\end{center}
+
+\newpage
+\tableofcontents
+\newpage
+
+\section{Einleitung und Ausgangslage}
+
+\subsection{Rückblick auf das Vorgängerprojekt}
+Im vorangegangenen Semester wurde im Rahmen des Projekts \enquote{Mobile Tastatur} ein Handschuh-Prototyp entwickelt, der ohne Blickkontakt und ohne Touchscreen bedienbar sein sollte. Die Eingabe erfolgte dabei über 23 leitfähige Kontaktflächen aus Kupfergewebe, die an den Fingergliedern von Zeige-, Mittel-, Ring- und kleinem Finger der linken Hand angebracht waren. Über eine mit Potential belegte Kontaktfläche am Daumen wurden an diesen Flächen bei Berührung ein Stromkreis geschlossen. Die Auswertung erfolgte über eine 5$\times$5-Matrixschaltung mit Dioden, die 25 mögliche Tastenkombinationen auf 10 Arduino-Anschlüssen abbildete. Die Ausgabe an den Host-Rechner lief über die offizielle Arduino-\texttt{Keyboard}-Bibliothek.
+
+Dieser Ansatz funktionierte grundsätzlich, brachte aber mehrere Nachteile mit sich, die die Grundlage für die Weiterentwicklung in diesem Semester bilden:
+
+\begin{itemize}
+    \item \textbf{Fehleranfälligkeit durch Matrixverschaltung:} Da mehrere Tasten dieselbe Zeile bzw.\ Spalte teilten, konnte es bei ungenauer Betätigung zu Queraktivierungen kommen.
+    \item \textbf{Keine parallele Betätigung möglich:} Durch die Verschaltung der Matrix ist es nicht möglich sinnvoll das Drücken mehrerer Kupferfelder parallel auszulesen.
+    \item \textbf{Abhängigkeit von der \gls{propriozeption}:} Die Erkennung, welches Fingerglied gerade berührt wird, setzt eine intakte Eigenwahrnehmung voraus, die nicht bei allen Personen gleich ausgeprägt ist.
+    \item \textbf{Komplexer Aufbau:} Pro Kontakt wurden zwei Dioden benötigt, was den Handschuh mechanisch aufwendig und fehleranfällig in der Fertigung machte. Zudem sind die vorhandenen Leitungen anfällig für Zugbelastung, sodass sich eine Leitung an den Kontaktpunkten auf Dauer leicht lösen kann.
+    \item \textbf{Abhängigkeit von der \texttt{Keyboard}-Bibliothek:} Die Ausgabe lief vollständig über die von Arduino bereitgestellte Bibliothek, wodurch der tatsächliche Aufbau eines HID-Reports im letzten Projekt nicht selbst entwickelt werden musste.
+\end{itemize}
+
+\section{Zielsetzung}
+\label{sec:zielsetzung}
+Für die Weiterentwicklung wurden folgende Ziele festgelegt:
+
+\begin{itemize}
+    \item \textbf{Nutzung beider Hände}, um den informativen Anteil einer einzelnen Eingabe zu erhöhen und so gezielt auch die Eingabegeschwindigkeit zu steigern.
+    \item \textbf{Verzicht auf die Bibliothek \texttt{Keyboard.h}}: Der \gls{hidreport} soll eigenständig implementiert werden, um die tatsächliche Struktur eines \gls{usb-hid}-Reports zu verstehen und volle Kontrolle über das gesendete Protokoll zu haben.
+    \item \textbf{Umschaltbare Tastaturlayouts}: Das Gerät soll die Verwendung verschiedener Tastaturlayouts ermöglichen. Insbesondere soll zwischen einem deutschen und einem russischen Layout umgeschaltet werden können.
+    \item \textbf{Weiterhin keine zusätzliche Software auf dem Host-System}: Das Gerät soll sich weiterhin als reines \gls{usb-hid}-Gerät melden und ohne Treiberinstallation funktionieren (\enquote{plug \& play}).
+\end{itemize}
+
+\section{Hardware und Verdrahtung}
+
+\subsection{Auswahl des Mikrocontrollers}
+Die bereits im ersten Projektabschnitt getroffene Wahl des Arduino Micro wurde
+beibehalten, da dieser weiterhin eine für die neue Verdrahtung ausreichende
+Anzahl an Pins bietet. Unter den schon damals festgelegten Auswahlkriterien
+-- native USB-Unterstützung, kompakte Baugröße und günstiger Preis -- schneidet
+er weiterhin am besten ab.
+
+\subsection{Wegfall der Matrix}
+Die zentrale Änderung gegenüber dem Vorgängerprojekt ist der Verzicht auf die Matrixverschaltung. Jede der zehn Tasten besitzt nun eine eigene, direkte Leitung zu einem digitalen Eingang des Arduino Micro. Dadurch entfallen die zuvor notwendigen Dioden vollständig, und Queraktivierungen zwischen Tasten sind in der Schaltung selbst ausgeschlossen. Die Tasten können somit unabhängig voneinander ausgewertet werden. Dieser höhere Pinbedarf wird durch die Reduktion von 23 auf 10 Tasten jedoch mehr als ausgeglichen.
+
+
+\subsection{Tastenaufteilung auf beide Hände}
+Die zehn Tasten verteilen sich wie folgt:
+
+\begin{itemize}
+    \item \textbf{8 Datentasten} (Pins 3--10), \textbf{je vier pro Hand}.
+    \item \textbf{2 Triggertasten} (Pins 1 und 2), \textbf{je eine pro Hand}, die das Auslesen der Datentasten anstoßen.
+\end{itemize}
+
+Pro Hand ergeben sich damit fünf Tasten (vier Datentasten und eine Triggertaste), die elektrisch alle gegen ein gemeinsames \gls{gnd}-Kabel geführt werden. Jede der fünf Tasten besitzt eine eigene Signalleitung zum jeweiligen Arduino-Pin, nur die Rückleitung nach \gls{gnd} wird pro Hand gebündelt. Dadurch reduziert sich die Anzahl der Kabel, die zur Auswerteelektronik geführt werden müssen (5 Signalleitungen + 1 gemeinsame \gls{gnd}-Leitung pro Hand), ohne dass dabei eine Matrix mit den beschriebenen Nachteilen entsteht -- es handelt sich weiterhin um zehn elektrisch unabhängige Taster, keine Kreuzverschaltung.
+Die Beschränkung auf acht Datentasten wurde gewählt, da sich damit exakt ein vollständiges Byte abbilden lässt, welches im HID-Report direkt als ein einzelner Keycode übertragen werden kann. Hierbei fungieren die Daumen als Bestätigungstasten (Trigger), die festlegen, wann genau dieses Byte aus den acht Datentasten ausgelesen und als Eingabe gewertet wird -- zusammen ergeben sich so die zehn Tasten der aktuellen Umsetzung. Eine höhere Tastenzahl würde zwar mehr Eingabemöglichkeiten schaffen, gleichzeitig aber den technischen Aufwand und die motorische Komplexität der Bedienung erhöhen. Die gewählte Tastenzahl stellt so einen Kompromiss zwischen der Anzahl möglicher Eingaben, dem technischen Aufwand und der Bedienbarkeit dar.
+
+
+
+
+\subsection{Pinbelegung und Beschaltung}
+Alle zehn Eingänge werden über interne \gls{pullup} des Arduino Micro (\texttt{INPUT\_PULLUP}) betrieben. Im Ruhezustand liegt an jedem Pin damit ein High-Pegel an. Ein Tastendruck verbindet den Pin mit dem gemeinsamen \gls{gnd} der jeweiligen Hand und zieht ihn so auf Low. Diese Logik muss folglich in der Software invertiert werden, um einen Tastendruck als \enquote{aktiv} zu interpretieren.
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Pin} & \textbf{Funktion} & \textbf{Bemerkung} \\
+\midrule
+1 & Trigger 1 & Interrupt, fallende Flanke \\
+2 & Trigger 2 & Interrupt, fallende Flanke \\
+3 -- 6 & Datentasten Hand A & je eigene Leitung \\
+7 -- 10 & Datentasten Hand B & je eigene Leitung \\
+\bottomrule
+\end{tabular}
+\caption{Pinbelegung der 10-Tasten-Edition}
+\end{table}
+
+\FloatBarrier
+
+\section{Software-Architektur}
+
+\subsection{Grober Ablauf}
+Der Ablauf orientiert sich am Prinzip des Vorgängerprojekts, wurde jedoch um einen zweiten unabhängigen Trigger erweitert und komplett auf eine eigene HID-Implementierung umgestellt:
+
+\begin{enumerate}
+    \item Ein Tastendruck an Pin 1 oder Pin 2 löst über \texttt{attachInterrupt()} eine fallende Flanke aus und ruft die zugehörige Methode (\texttt{pressed()} bzw.\ \texttt{pressed2()}) auf.
+    \item Ist der jeweilige Trigger \enquote{scharf} (armed), ruft die \gls{isr} \texttt{captureKeys()} auf.
+    \item \texttt{captureKeys()} liest über \texttt{readKeys()} den Zustand aller acht Datentasten als ein Byte aus und legt dieses Byte im \gls{ringpuffer} ab.
+    \item In der \texttt{loop()}-Funktion werden die im Puffer abgelegten Bytes nacheinander entnommen und an \texttt{processSnapshot()} übergeben, welche daraus einen vollständigen HID-Report baut und über \texttt{sendReport()} verschickt.
+\end{enumerate}
+
+Damit bleibt die zeitkritische Arbeit (das reine Erfassen des Tastenzustands) in der \gls{isr} minimal, während die aufwendigere Umsetzung in ein HID-Signal im Hauptprogramm erfolgt -- ein Prinzip, das schon im Vorgängerprojekt genutzt wurde und hier fortgeführt und auf zwei Trigger erweitert wird.
+
+\subsection{Bitkodierung der Tastenzustände}
+Die Funktion \texttt{readKeys()} liest die vier \gls{portregister} \texttt{PINB}, \texttt{PINC}, \texttt{PIND} und \texttt{PINE} aus und extrahiert daraus gezielt die acht Bits, die zu den Pins 3--10 gehören. Da diese Pins auf dem Arduino Micro nicht in einer fortlaufenden Reihenfolge auf den physischen Ports liegen, müssen die einzelnen Bits durch Maskierung und Schieben an die richtige Stelle in einem gemeinsamen Ergebnis-Byte gebracht werden:
+
+\begin{lstlisting}[style=arduino]
+uint8_t readKeys()
+{
+  uint8_t d = PIND;
+  uint8_t c = PINC;
+  uint8_t e = PINE;
+  uint8_t b = PINB;
+
+  uint8_t result =
+        ((b & 0x70) << 1)
+      | (d & 0x01)
+      | ((d & 0x10) >> 3)
+      | ((c & 0x40) >> 4)
+      | ((d & 0x80) >> 4)
+      | ((e & 0x40) >> 2);
+
+  return ~result;
+}
+\end{lstlisting}
+
+Das abschließende \texttt{\textasciitilde{}result} invertiert alle acht Bits, da die \gls{pullup}-Beschaltung eine gedrückte Taste als Low-Pegel liefert. Das Ergebnis ist ein sogenanntes \enquote{Snapshot}-Byte, in dem jedes Bit für genau eine physische Taste steht. Dieser Wert wird als ein einziger Code ausgewertet, nicht als einzelne Tastendrücke:
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Arduino-Pin} & \textbf{Bitwert im Snapshot} \\
+\midrule
+3  & 0x01 \\
+4  & 0x02 \\
+5  & 0x04 \\
+6  & 0x08 \\
+7  & 0x10 \\
+8  & 0x20 \\
+9  & 0x40 \\
+10 & 0x80 \\
+\bottomrule
+\end{tabular}
+\caption{Bitzuordnung der Datentasten im Snapshot-Byte, angewendet im Registerzugriffe in \texttt{readKeys()}}
+\end{table}
+\FloatBarrier
+
+\subsection{Ringpuffer}
+\label{sec:ringpuffer}
+Wie im Vorgängerprojekt wird ein \gls{ringpuffer} nach dem \gls{FIFO}-Prinzip verwendet, hier mit 16 Speicherplätzen für einzelne Snapshot-Bytes:
+
+\begin{lstlisting}[style=arduino]
+volatile uint8_t keyBuffer[16];
+volatile uint8_t writePos = 0;
+volatile uint8_t readPos  = 0;
+\end{lstlisting}
+
+Das Weiterzählen der Schreib- und Leseposition erfolgt über eine bitweise UND-Verknüpfung mit \texttt{15} (\texttt{(writePos~+~1)~\&~15}). Bei einer Puffergröße von genau 16 Elementen ist dies gleichbedeutend mit der Modulo-Operation \texttt{\% 16}: Die Maske schneidet den Überlauf ab und springt so nach Index~15 wieder auf Index~0. Dies funktioniert nur, weil 16 eine Zweierpotenz ist. Die Maskierung wurde gewählt, weil sie bereits im Quellcode als einzelne Bitoperation formuliert ist und somit nicht vom Optimierungsverhalten des Compilers abhängt.
+In \texttt{captureKeys()} wird vor dem Schreiben geprüft, ob der Puffer voll ist (\texttt{next~==~readPos}), ist dies der Fall, wird der neue Snapshot verworfen, um ein Überschreiben noch nicht verarbeiteter Daten zu verhindern. Da stets ein Slot freigehalten wird, um \enquote{voll} von \enquote{leer} unterscheiden zu können, fasst der Puffer effektiv 15 Einträge. Da \texttt{keyBuffer}, \texttt{writePos} und \texttt{readPos} sowohl von der \gls{isr} als auch von \texttt{loop()} verwendet werden, sind sie als \texttt{volatile} deklariert. Dies stellt sicher, dass der Compiler Änderungen dieser Variablen durch die \gls{isr} berücksichtigt und Zugriffe darauf nicht unzulässig optimiert.
+
+Im regulären Betrieb ist ein voller Puffer nicht zu erwarten: Die Verarbeitung eines Snapshots dauert nur wenige Millisekunden, während die Triggerlogik pro Trigger mindestens die Haltedauer des Tasters plus 10\,ms Freigabezeit zwischen zwei Eingaben erzwingt. Der Puffer dient daher primär dazu, nahezu gleichzeitige Eingaben beider Hände sowie kurzzeitige Verzögerungen beim USB-Senden abzufangen.
+
+\paragraph{Wichtige Einschränkung: Getrennte Verarbeitung Gepufferter Tasteneingaben.}
+Der \gls{ringpuffer} sorgt zwar dafür, dass kein Tastendruck verloren geht, wenn kurz hintereinander mehrere Trigger auslösen -- er sorgt aber nicht dafür, dass daraus ein gemeinsamer, mehrere Tasten umfassender HID-Report entsteht. \texttt{loop()} entnimmt die Einträge strikt nacheinander: Für jeden einzelnen Snapshot wird in \texttt{processSnapshot()} ein vollständiger Zyklus aus Senden, 5\,ms halten und wieder Loslassen durchlaufen (siehe Abschnitt~\ref{sec:regulaer}), bevor der nächste Eintrag aus dem Puffer geholt wird. Werden also z.\,B.\ Trigger~1 und Trigger~2 fast gleichzeitig ausgelöst, landen zwar beide Snapshots sicher im Puffer, sie werden aber trotzdem als zwei getrennte, kurz nacheinander gesendete Reports mit jeweils nur \texttt{keys[0]} belegt ausgegeben -- nicht als ein einziger Report mit \texttt{keys[0]} und \texttt{keys[1]}. Ein \enquote{echtes} gleichzeitiges Mehrfach-Tippen mehrerer Tasten ist mit der aktuellen Verarbeitung folglich nicht möglich, unabhängig davon, wie schnell die Tasten tatsächlich gedrückt werden. Dies ist insbesondere für Tastenkombinationen relevant, bei denen neben mehreren Modifier-Tasten auch mehrere reguläre Tasten gleichzeitig gedrückt sein müssen. Eine Kombination wie \texttt{Strg+Shift+H+S} würde erfordern, dass sowohl \texttt{H} als auch \texttt{S} gleichzeitig in einem HID-Report enthalten sind. Da die regulären Tasten aktuell nacheinander verarbeitet werden, werden sie nicht als gleichzeitig gedrückte Tasten übertragen.
+
+
+\section{Trigger und Entprellung}
+
+\subsection{Zwei unabhängige Trigger}
+Im Gegensatz zum Vorgängerprojekt, das mit einem einzelnen Trigger an Pin~D2 arbeitete, nutzt die 10-Tasten-Edition zwei unabhängige Trigger an den Pins~1 und~2 -- einen pro Hand:
+
+\begin{lstlisting}[style=arduino]
+pinMode(2, INPUT_PULLUP);
+attachInterrupt(digitalPinToInterrupt(2), pressed2, FALLING);
+
+pinMode(1, INPUT_PULLUP);
+attachInterrupt(digitalPinToInterrupt(1), pressed, FALLING);
+\end{lstlisting}
+
+Beide Trigger lösen unabhängig voneinander eine Erfassung der acht Datentasten aus. Da jeder Trigger einen eigenen Arming-Zustand besitzt, kann der eine Trigger auslösen, auch wenn der andere noch nicht wieder scharf geschaltet ist
+
+\subsection{Arming/Disarming statt reiner Zeitmessung}
+Während im Vorgängerprojekt die Entprellung allein über einen Mindestabstand von 100~ms zwischen zwei Eingaben mit \texttt{millis()} realisiert wurde, verwendet dieses Projekt einen zustandsbasierten Mechanismus: Jeder Trigger befindet sich entweder im Zustand \emph{armed} (bereit, einen neuen Tastendruck zu erkennen) oder \emph{disarmed} (gesperrt, bis der Taster sicher wieder losgelassen wurde):
+
+\begin{lstlisting}[style=arduino]
+void pressed()
+{
+  if (trigger1Armed)
+  {
+    trigger1Armed = false;
+    captureKeys();
+  }
+}
+\end{lstlisting}
+
+Nach dem Auslösen wird der Trigger also sofort gesperrt. Erst wenn der zugehörige Pin für eine ununterbrochene Mindestdauer von 10\,ms auf High liegt -- der Taster also sicher losgelassen wurde und nicht mehr \gls{prellen} kann -- wird der Trigger in \texttt{loop()} wieder scharf geschaltet:
+\begin{lstlisting}[style=arduino]
+if (!trigger1Armed)
+{
+  if (digitalRead(1) == HIGH)
+  {
+    if (trigger1HighSince == 0)
+      trigger1HighSince = now;
+    else if ((uint32_t)(now - trigger1HighSince) >= RELEASE_TIME)
+    {
+      noInterrupts();
+      if (digitalRead(1) == HIGH)
+      {
+        trigger1Armed = true;
+        trigger1HighSince = 0;
+      }
+      interrupts();
+    }
+  }
+  else
+  {
+    trigger1HighSince = 0;
+  }
+}
+\end{lstlisting}
+
+Fällt der Pin während der Wartezeit erneut auf Low (z.\,B.\ durch Prellen beim Loslassen), wird \texttt{trigger1HighSince} zurückgesetzt und die Wartezeit beginnt von vorn. Dieses Verfahren verhindert, dass ein einzelner physischer Tastendruck mehrfach als Eingabe gezählt wird, ohne dass wie im Vorgängerprojekt ein so großer Mindestabstand zwischen den Eingaben in Kauf genommen werden muss.
+
+\subsection{Schutz vor Race Conditions}
+Da \texttt{trigger1Armed} sowohl in der \gls{isr} \texttt{pressed()} als auch in \texttt{loop()} verändert wird, erfolgt die eigentliche Freigabe innerhalb eines kritischen Abschnitts (\texttt{noInterrupts()} / \texttt{interrupts()}) mit einer erneuten Prüfung des Pinzustands unmittelbar vor dem Setzen von \texttt{trigger1Armed~=~true}. Damit wird ausgeschlossen, dass zwischen der Prüfung in \texttt{loop()} und dem tatsächlichen Scharfschalten ein neuer Interrupt unbemerkt bleibt.
+
+\section{Eigene HID-Implementierung ohne \texttt{Keyboard.h}}
+
+
+
+
+\subsection{Warum ein eigener HID-Report?}
+Ein zentrales Ziel und Teil der Aufgabenstellung des Projekts war es, nicht länger auf die von Arduino bereitgestellte \texttt{Keyboard}-Bibliothek zurückzugreifen, sondern den \gls{hidreport} selbst zu definieren. Die Bibliothek kapselt den Aufbau des Reports vollständig hinter Funktionen wie \texttt{Keyboard.press()}, sodass Deskriptor, Report-ID und Byte-Layout für den Anwender unsichtbar bleiben. Ein eigener Report macht diese Struktur nachvollziehbar und gibt volle Kontrolle darüber, welche Bytes tatsächlich an den Host gesendet werden. Dazu wird direkt auf die \texttt{HID}-Kernbibliothek des Arduino-USB-Stacks zugegriffen und ein eigener \gls{hidreport} angemeldet:
+
+\begin{lstlisting}[style=arduino]
+HIDSubDescriptor node(hidReportDescriptor, sizeof(hidReportDescriptor));
+
+class KeyboardHID_ {
+public:
+  KeyboardHID_() {
+    HID().AppendDescriptor(&node);
+  }
+};
+\end{lstlisting}
+
+\subsection{Selbstbeschreibung des Geräts}
+\subsubsection{Der Anmeldeblock: Geräteart und Report-ID}
+Bevor festlegt wird, wie ein einzelner Report aufgebaut ist, muss er dem Host zunächst mitteilen, um was für ein Gerät es sich überhaupt handelt. Dies übernehmen die ersten acht Bytes:
+
+\begin{lstlisting}[style=arduino]
+0x05, 0x01,  // Usage Page (Generic Desktop Controls)
+0x09, 0x06,  // Usage (Keyboard)
+0xA1, 0x01,  // Collection (Application)
+0x85, 0x01,  // Report ID (1)
+\end{lstlisting}
+
+\begin{itemize}
+    \item \textbf{Usage Page (Generic Desktop Controls):} ordnet das Gerät zunächst grob der Kategorie \enquote{gewöhnliche Desktop-Eingabegeräte} zu (zu der z.\,B. auch Maus und Joystick gehören).
+    \item \textbf{Usage (Keyboard):} legt innerhalb dieser Kategorie konkret fest, dass es sich um eine Tastatur handelt. Genau dieses eine Feld ist es, das den Host dazu veranlasst, das Gerät wie eine normale Tastatur zu behandeln -- also z.\,B.\ auch schon am BIOS/UEFI-Bootbildschirm oder im Login-Fenster ohne jede Treiberinstallation zu funktionieren.
+    \item \textbf{Collection (Application):} eröffnet eine zusammenhängende logische Gruppe, in der alle nachfolgenden Felder (Modifier-Bits und Keycode-Array) gebündelt werden. Sie wird am Ende durch \texttt{0xC0} wieder geschlossen.
+    \item \textbf{Report ID (1):} Da ein einzelnes USB-HID-Interface grundsätzlich mehrere unterschiedlich aufgebaute Reports über denselben Kanal schicken könnte, bekommt jeder Report-Typ eine eindeutige Nummer vorangestellt. Dieses Projekt definiert nur einen einzigen Report-Typ mit der ID~1 -- exakt dieselbe Zahl, die \texttt{sendReport()} später bei jedem \texttt{HID().SendReport(1, ...)} mitschickt, damit der Host das gesendete Paket korrekt diesem Deskriptor zuordnen kann.
+\end{itemize}
+
+\subsubsection{Der eigentliche Report}
+Nach dem Anmeldeblock folgt die Definition des Reports selbst. Er entspricht in seiner Struktur dem in der offiziellen \gls{usb-hid}-Spezifikation für Tastaturen beschriebenen \gls{bootprotokoll} und wird hier vollständig manuell als Byte-Array definiert. Inhaltlich beschreibt er drei Felder pro gesendetem Report:
+
+\begin{itemize}
+    \item \textbf{1 Byte Modifier} -- acht einzelne Bits für die Modifikatortasten (Strg, Umschalt, Alt, Windows/GUI, jeweils links und rechts).
+    \item \textbf{1 Byte Reserved} -- ungenutztes, konstantes Füllbyte, das laut Spezifikation vorgesehen, aber nicht belegt ist.
+    \item \textbf{6 Byte Keycode-Array} -- bis zu sechs gleichzeitig gedrückte reguläre Tasten. Jedes der sechs Bytes ist zwar als volles 8-Bit-Feld angelegt und könnte damit technisch jeden Wert von 0x00 bis 0xFF speichern, der Deskriptor deklariert über \texttt{Logical Minimum}/\texttt{Logical Maximum} sowie \texttt{Usage Minimum}/\texttt{Usage Maximum} jedoch ausdrücklich nur den Bereich 0 bis 0x65 (dezimal 101) als gültig -- exakt der aus der USB-HID-Tabelle bekannte Wertebereich der Tasten eines klassischen 101-Tasten-Keyboards. Werte oberhalb von 101 sind laut Deskriptor nicht definiert. Der Host darf somit solche Werte ignorieren.
+\end{itemize}
+
+Diese Struktur wird in der \texttt{KeyReport}-Struktur nachgebildet, die exakt dessen Größe und Reihenfolge entspricht:
+
+\begin{lstlisting}[style=arduino]
+typedef struct {
+  uint8_t modifiers;
+  uint8_t reserved;
+  uint8_t keys[6];
+} KeyReport;
+\end{lstlisting}
+
+Das eigentliche Versenden übernimmt \texttt{sendReport()}, das den kompletten Struct-Inhalt über die zuvor registrierte Report-ID~1 an den Host schickt:
+
+\begin{lstlisting}[style=arduino]
+void sendReport() {
+  HID().SendReport(1, &report, sizeof(report));
+}
+\end{lstlisting}
+
+\subsubsection{Warum Reserved-Byte und genau sechs Keycode-Bytes?}
+
+Die Gesamtstruktur \enquote{1 Byte Modifier + 1 Byte Reserved + 6 Byte Keycodes} (8 Byte insgesamt) ist nicht willkürlich gewählt, sondern orientiert sich am in der \gls{usb-hid}-Spezifikation festgelegten \gls{bootprotokoll} für Tastaturen. Dieses Format ist deshalb wichtig, weil einfache Umgebungen wie das BIOS/UEFI eines PCs, ein Bootloader oder das frühe Booten eines Betriebssystems den individuellen Report-Deskriptor eines Geräts oft gar nicht auswerten. Sie verlassen sich stattdessen auf das fest vorgegebene 8-Byte-Format.
+Würde stattdessen z.\,B.\ das Reserved-Byte weggelassen oder das Keycode-Array kürzer als sechs Byte ausfallen, so würde das Gerät unter einem vollständigen Betriebssystem mit eigenem HID-Treiber zwar weiterhin einwandfrei funktionieren (da dieser den individuellen Deskriptor korrekt ausliest), an einem BIOS/UEFI-Setup-Bildschirm oder während des frühen Bootens können jedoch Fehler auftreten.
+Da genau dieses \enquote{Plug\,\&\,Play ohne Zusatzsoftware} zu den erklärten Zielen dieses Projekts gehört, wurde bewusst exakt am Boot-Protokoll-Format festgehalten.
+
+\subsubsection{Bekannte Einschränkung: Werte oberhalb von 101}
+In \texttt{processSnapshot()} werden ausschließlich die acht Werte 0xE8 bis 0xEF explizit als Modifikator-Kommandos abgefangen (siehe Abschnitt~\ref{sec:modifier}). Alle übrigen Snapshot-Werte oberhalb von 101 -- also der Bereich 0x66 bis 0xE7 -- werden dagegen unverändert in \texttt{keys[0]} geschrieben und als regulärer Report verschickt, obwohl sie außerhalb des vom Deskriptor deklarierten gültigen Bereichs (0 bis 101) liegen. In der Praxis ignorieren die meisten Betriebssysteme solche undefinierten Werte stillschweigend. Spezifikationskonform ist dieses Verhalten jedoch streng genommen nicht. Eine vollständige Lösung müsste zusätzlich alle Snapshot-Werte oberhalb von 101 gezielt abfangen oder das Tastenlayout von vornherein so wählen, dass ausschließlich gültige Kombinationen entstehen können.
+
+\subsection{Warum keine direkte Zeichenausgabe oder feste 101-Tasten-Tabelle?}
+\label{sec:chars}
+Eine naheliegende Frage ist, warum die Tastatur nicht direkt Zeichen (z.\,B.\ ASCII) sendet oder eine feste Tabelle nach dem Vorbild klassischer 101-Tasten-Tastaturen (AT-101) verwendet.
+
+Eine direkte Zeichenübertragung, etwa als ASCII oder in einer erweiterten Zeichenkodierung, scheidet aus. Zum einen sind Modifikatoren (Strg, Alt, Windows) sowie Pfeil- und Funktionstasten keine Zeichen; eine Tastenkombination wie Strg+C ließe sich in keiner Zeichenkodierung darstellen. Zum anderen behandelt das Betriebssystem nur Geräte mit dem Tastatur-Profil von USB-HID als Tastatur, und dieses überträgt Tastencodes statt Zeichen. Zwar ließen sich Zeichen auch über einen eigenen HID-Report oder eine virtuelle serielle Schnittstelle (USB-CDC) senden, doch müsste dann Zusatzsoftware auf dem Host diese Daten erst in Eingaben umsetzen. Das widerspricht dem Ziel, das Gerät ohne Treiber oder Zusatzsoftware zu betreiben (siehe Abschnitt~\ref{sec:zielsetzung}). Würde die Firmware die Zeichen stattdessen selbst in Tastencodes zurückrechnen, wäre sie an ein festes Layout gebunden.
+
+Klassische AT-Tastaturen übertragen keine Zeichen, sondern \gls{scancode}s, die nur die Position der Taste angeben. Dieses Prinzip \enquote{Position statt Zeichen} liegt auch USB-HID zugrunde. Die AT-Tastaturen übertragen ihre Scancodes jedoch über das PS/2-Protokoll. Dieser Anschluss ist an heutigen Hosts (z.\,B.\ Laptops, Tablets) oft nicht mehr vorhanden. USB hingegen wird von praktisch jedem Host unterstützt, und der Arduino Micro bringt dafür native Hardwareunterstützung mit. Mit USB-HID meldet sich das Gerät als reines USB-Gerät und funktioniert ohne Treiberinstallation (siehe Abschnitt~\ref{sec:zielsetzung}).
+
+\gls{usb-hid} überträgt positionsbezogene Usage-Codes vollständig über USB. So steht beispielsweise \texttt{0x04} in den HID Usage Tables (Keyboard/Keypad Page) für \enquote{Keyboard a and A}. Welches Zeichen daraus entsteht, entscheidet erst der Host anhand des eingestellten Tastaturlayouts. Dieselbe Firmware funktioniert dadurch mit allen Layouts, und eine eigene Zeichentabelle ist nicht erforderlich.
+
+Da die Tastatur selbst kein Sprachkonzept besitzt, lassen sich auch russische Zeichen ohne Codeänderung ausgeben, sofern am Host ein russisches Layout aktiv ist. Lediglich die Zuordnung von Fingerkombination zu Taste müsste sich der Nutzer für dieses Layout neu einprägen.
+
+\subsection{Modifikatortasten als Sonderfall}
+\label{sec:modifier}
+Da die acht Datentasten nur 256 mögliche Snapshot-Werte liefern können und ein Teil davon für reguläre Zeichen benötigt wird, werden die obersten acht Werte des Wertebereichs (0xE8 bis 0xEF) als reservierter Bereich für Modifikatortasten genutzt:
+
+\begin{lstlisting}[style=arduino]
+#define CMD_TOGGLE_LCTRL  0xE8
+#define CMD_TOGGLE_LSHIFT 0xE9
+#define CMD_TOGGLE_LALT   0xEA
+#define CMD_TOGGLE_LGUI   0xEB
+#define CMD_TOGGLE_RCTRL  0xEC
+#define CMD_TOGGLE_RSHIFT 0xED
+#define CMD_TOGGLE_RALT   0xEE
+#define CMD_TOGGLE_RGUI   0xEF
+\end{lstlisting}
+\paragraph{Warum ausgerechnet mit diesen acht Werten?}
+Bei der Umsetzung wurde eine Alternative bewusst verworfen: Statt den fest reservierten Kombinationswerte könnte man auch einen einzelnen \enquote{Escape}-Signal definieren, auf den dann ein zweiter, separat ausgewerteter Snapshot als eigentliche Modifikator-Auswahl folgt. 
+Dieser zweistufige Ansatz wurde verworfen, weil er für jede Modifikatoraktivierung zwei getrennte, nacheinander ausgelöste Trigger-Ereignisse benötigt hätte -- also zwei getrennte Tastendrücke statt eines einzigen. Dies hat nach dem eigenen Ermessen den Schreibfluss unterbrochen, und wurde deshalb verworfen.
+Stattdessen wurde ein einstufiges Verfahren gewählt. Die acht Werte von \texttt{0xE8} bis \texttt{0xEF} werden fest den acht Modifikatortasten zugeordnet. Diese Werte liegen am oberen Ende des Wertebereichs und werden daher nicht für reguläre Zeichen verwendet. Eine entsprechende Eingabekombination löst dadurch unmittelbar die zugehörige Modifikatorfunktion aus, ohne dass ein zusätzliches Signal erforderlich ist.
+Wird ein reservierter Snapshot erkannt, wird das zugehörige Bit in der globalen Variable \texttt{heldModifiers} per XOR umgeschaltet (getoggelt), statt wie bei einer normalen Taste einen einzelnen Report zu senden und die Taste sofort wieder loszulassen:
+
+\begin{lstlisting}[style=arduino]
+if (modifier != 0)
+{
+  heldModifiers ^= modifier;
+  leere();
+  report.modifiers = heldModifiers;
+  sendReport();
+  return;
+}
+\end{lstlisting}
+
+Dadurch bleibt eine Modifikatortaste (z.\,B.\ Strg) so lange \enquote{gedrückt}, bis die zugehörige Kombination erneut eingegeben wird, um mit den vorhandenen zehn Tasten dennoch Tastenkombinationen wie Strg+C nachbilden zu können, ohne eine zusätzliche physische Halteoption zu benötigen. Gleichzeitig kann eine aktivierte Modifikatortaste auch ohne weitere reguläre Taste übertragen werden, indem ein leerer Snapshot (\texttt{0x00}) verarbeitet wird. Dadurch sind beispielsweise auch einzelne Betätigungen der Windows-Taste möglich.
+
+\subsection{Reguläre Tasten}
+\label{sec:regulaer}
+Alle Snapshot-Werte außerhalb des reservierten Modifikator-Bereichs werden als normale Zeichen behandelt. Dabei wird der HID-Report zunächst mit dem gedrückten Keycode gesendet. Anschließend wird eine feste Haltezeit von 5\,ms eingehalten, damit der Tastendruck für den Host mindestens über ein Abfrageintervall hinaus sichtbar bleibt und auch von Anwendungen erkannt wird, die den Tastenzustand selbst abfragen. Danach wird der Report wieder geleert und erneut gesendet, um die Taste logisch loszulassen:
+
+\begin{lstlisting}[style=arduino]
+leere();
+report.modifiers = heldModifiers;
+report.keys[0] = snapshot;
+sendReport();
+
+delay(5);
+leere();
+report.modifiers = heldModifiers;
+sendReport();
+\end{lstlisting}
+
+Aktuell wird dabei stets nur \texttt{keys[0]} des sechs Byte großen Arrays belegt, auch wenn der Deskriptor bis zu sechs gleichzeitige Tasten erlauben würde. Wie in Abschnitt~\ref{sec:ringpuffer} beschrieben, liegt das nicht nur an dieser bewussten Vereinfachung, sondern auch daran, dass die aktuelle Puffer-Verarbeitung ohnehin jeden Eintrag einzeln und vollständig abarbeitet, bevor der nächste an der Reihe ist -- eine Erweiterung auf mehrere Slots würde daher zusätzlich eine Änderung der Verarbeitungslogik selbst erfordern (siehe Abschnitt~\ref{sec:ausblick}).
+
+\section{Keymap und Beispiele}
+\label{sec:keymap}
+Aus der Bitzuordnung der Datentasten lassen sich sowohl einzelne Tastendrücke als auch Kombinationen mehrerer gleichzeitig gedrückter Tasten als eindeutige Snapshot-Werte ableiten. Tabelle~\ref{tab:keymap} zeigt eine Auswahl:
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Gedrückte Pin(s)} & \textbf{Snapshot-Byte} & \textbf{Ergebnis} \\
+\midrule
+Pin 5 & 0x04 & a \\
+Pin 6 & 0x08 & e \\
+Pin 3 + Pin 6 & 0x09 & f \\
+Pin 4 + Pin 8 & 0x22 & 5 \\
+Pin 7 + Pin 8 & 0x30 & + \\
+Pin 6 + 8 + 9 + 10 & 0xE8 & Strg (Modifikator) \\
+\bottomrule
+\end{tabular}
+\caption{Beispielhafte Keymap-Einträge für eine deutsche QWERTZ-Tastaturbelegung}
+\label{tab:keymap}
+\end{table}
+\FloatBarrier
+
+Da die tatsächlich gesendeten Werte reine \gls{usb-hid}-Keycodes sind (z.\,B.\ 0x04 für die Taste \enquote{A}), entspricht das dargestellte Zeichen stets der Interpretation dieses Keycodes durch das aktuell auf dem Host-System eingestellte Tastaturlayout, nicht zwingend fest dem hier notierten Zeichen.
+\paragraph{Beispiel: Ein großes \enquote{A} schreiben.}
+Ein Großbuchstabe entsteht nicht aus einem einzelnen Snapshot, sondern aus zwei nacheinander ausgelösten Eingaben. Zunächst wird die Kombination 0xE9 (\texttt{CMD\_TOGGLE\_LSHIFT}) ausgelöst: Das Bit \texttt{MOD\_LSHIFT} wird in \texttt{heldModifiers} gesetzt, und es wird sofort ein Report mit aktivem Shift-Modifier, aber ohne gedrückte Zeichentaste verschickt. Anschließend erzeugt die reguläre Betätigung von Pin~5 (Snapshot 0x04) einen zweiten Report, dessen \texttt{modifiers}-Feld weiterhin das gesetzte Shift-Bit enthält und dessen \texttt{keys[0]} auf 0x04 steht. Der Host interpretiert diese Kombination aus Usage-Code 0x04 und aktivem Shift-Modifier als \enquote{A}. Da \texttt{CMD\_TOGGLE\_LSHIFT} als Toggle implementiert ist, bleibt Shift so lange aktiv, bis dieselbe Kombination erneut betätigt wird -- für ein einzelnes großes Zeichen muss der Modifier also anschließend bewusst wieder deaktiviert werden, um nicht versehentlich weitere Zeichen großzuschreiben.
+
+\section{Vergleich zur Vorgängerversion}
+\label{sec:vergleich}
+
+\begin{table}[ht]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Merkmal} & \textbf{Vorher (1. Semester)} & \textbf{Jetzt (2. Semester)} \\
+\midrule
+Tasten & 23 Kontaktflächen & 10 (8 Daten + 2 Trigger) \\
+Verdrahtung & 5$\times$5-Matrix mit Dioden & Direkter Input je Taste \\
+Sensorik & Propriozeption, Berührpunkte & Feste Taster \\
+Hände & Nur linke Hand & Beide Hände \\
+Fehleranfälligkeit & Queraktivierung möglich & Deutlich reduziert \\
+Ausgabe & Arduino-\texttt{Keyboard}-Bibliothek & Eigener HID-Report-Deskriptor \\
+\bottomrule
+\end{tabular}
+\caption{Gegenüberstellung der beiden Projektphasen}
+\end{table}
+\FloatBarrier
+
+Die konsequente Reduktion der Fehlerquellen und der Verzicht auf die Matrixschaltung gehen mit einer direkteren HID-Übergabe einher: Da nicht mehr über die \texttt{Keyboard}-Bibliothek, sondern über einen eigenen, minimalen Report gearbeitet wird, entfallen komfortable Befehle wie \texttt{Keyboard.press()}, wie sie im Vorgängerprojekt genutzt wurden. Modifikatortasten mussten dafür manuell über den reservierten Wertebereich 0xE8--0xEF nachgebildet werden. Zudem ist mit der aktuellen Implementierung -- anders als im Vorgängerprojekt, das über die Variable \texttt{active} zwischen mehreren Tastaturebenen umschalten konnte -- kein Layoutwechsel und Befehlstasten vorgesehen.
+
+\section{Fazit}
+Im Rahmen dieses zweiten Projektabschnitts konnte gezeigt werden, dass sich durch den Wegfall der Matrixverschaltung und die Aufteilung auf beide Hände die Fehleranfälligkeit der mobilen Tastatur deutlich reduzieren lässt, ohne auf das Grundprinzip einer softwarelosen, blind bedienbaren USB-Tastatur zu verzichten. Der zentrale technische Fortschritt liegt jedoch im eigenständig implementierten \gls{hidreport}: Statt sich auf die \texttt{Keyboard}-Bibliothek zu verlassen, wurde ein vollständiger, eigener HID-Report-Deskriptor entworfen, der Modifikatortasten über einen reservierten Wertebereich sowie reguläre Zeichentasten über direkte, standardisierte USB-HID-Positionscodes abbildet -- und damit bewusst demselben Grundprinzip folgt, das bereits klassische Tastaturen nutzten. In Kombination mit dem bewährten \gls{ringpuffer}-Prinzip aus dem Vorgängerprojekt und einem neuen, zustandsbasierten Arming/Disarming-Mechanismus zur Entprellung zweier unabhängiger Trigger konnte eine robuste und gleichzeitig deutlich einfacher aufgebaute Eingabelösung realisiert werden.
+
+\section{Ausblick}
+\label{sec:ausblick}
+Für eine mögliche weitere Ausbaustufe bieten sich folgende Anknüpfungspunkte an:
+
+\begin{itemize}
+    \item \textbf{Nutzung mehrerer Keycode-Slots:} Der HID-Report unterstützt bereits sechs gleichzeitig übertragbare Tasten (\texttt{keys[0]} bis \texttt{keys[5]}). Aktuell wird jedoch nur \texttt{keys[0]} befüllt. Eine mögliche Erweiterung wäre, zukünftig zu prüfen, ob sich mehrere Einträge im \gls{ringpuffer} befinden, und diese bei Bedarf gemeinsam in einem HID-Report zu übertragen.
+    \item \textbf{Einhändiger Betrieb:} Aktuell ist die Eingabe auf den gleichzeitigen Einsatz beider Hände ausgelegt; ein Zusatzmodus für nur eine verfügbare Hand ist bislang nicht vorgesehen.
+    \item \textbf{Ergonomisches Gehäuse:} Die aktuelle Umsetzung besteht aus einer in der Hand gehaltenen Röhre mit zehn Tastern. Eine mögliche Weiterentwicklung wäre eine ergonomisch optimierte Gehäuseform, bei der die Taster gut erreichbar sind und das Gerät sicher und komfortabel in der Hand liegt.
+    \item \textbf{Makros und Sonderfunktionen:} Der aktuell nicht für reguläre Zeichen verwendete Wertebereich könnte gezielt für Sonderfunktionen genutzt werden. Statt ausschließlich den Zustand einzelner Modifikatortasten über \texttt{heldModifiers} zu verändern, könnte \texttt{processSnapshot()} für bestimmte Snapshot-Werte auch vordefinierte Folgen von HID-Reports versenden. Dadurch könnte beispielsweise eine einzelne Eingabe das automatische Senden einer Zeichenfolge wie \enquote{Hello World} auslösen.
+    \item \textbf{Erweiterter HID-Report:} Alternativ könnten die bisher nicht für reguläre Zeichen verwendeten Snapshot-Werte über einen zweiten HID-Report an den Host übertragen werden. Speziell entwickelte Anwendungen könnten diese Eingaben unabhängig vom normalen Tastatur-Report auswerten und darauf basierend eigene Funktionen ausführen, die über die normale Tastatureingabe hinausgehen.
+\end{itemize}
+
+\section*{Hinweise}
+Da die Zeichenausgabe über reine \gls{usb-hid}-Positionscodes erfolgt, bestimmt ausschließlich das auf dem Host-System eingestellte Tastaturlayout, welches Zeichen tatsächlich erscheint. Ein und derselbe Snapshot-Wert kann auf einem System mit deutschem Layout ein anderes Zeichen erzeugen als auf einem System mit US- oder russischem Layout.
+
+\newpage
+Die verwendete HID-Kernbibliothek basiert auf der offiziellen Arduino-Dokumentation
+\url{https://github.com/arduino-libraries/Keyboard/blob/master/src/Keyboard.h}, deren \texttt{Keyboard.h}-Abstraktion in diesem Projekt bewusst nicht mehr genutzt wird.
+\ \\
+\ \\
+Die Zuordnung der Keycodes orientiert sich an den offiziellen USB-HID Usage Tables (Keyboard/Keypad Page):
+\url{https://www.usb.org/document-library/hid-usage-tables-14}.
+\ \\
+\ \\
+Details zur Pinbelegung und den PORT-Registern des Arduino Micro:
+\url{https://docs.arduino.cc/hardware/micro/}.
+\ \\
+\ \\
+Das vorherige Projekt ist auffindbar unter
+\url{https://github.com/Crafter04/Handkey/}.
+\ \\
+\ \\
+Der für die 10-Tasten-Edition entwickelte Code ist auffindbar unter
+\url{https://github.com/Crafter04/Keyboard/}.
+
+\printglossary[type=main]
+\printglossary[type=acronym]
+\end{document}
