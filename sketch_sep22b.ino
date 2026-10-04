@@ -56,9 +56,11 @@ public:
   KeyboardHID_() {
     HID().AppendDescriptor(&node);
   }
-} KeyboardHID;
+};
 
-// Reservierter Bereich 0xE8-0xEF fuer Modifier-Toggles
+KeyboardHID_ KeyboardHID;
+
+// (HID Reserved 0xE8-0xEF - sonst kann man bei 0x00 in eine modifiere auswahl gehen - das würde aber flow Stören)
 
 #define CMD_TOGGLE_LCTRL  0xE8
 #define CMD_TOGGLE_LSHIFT 0xE9
@@ -80,14 +82,9 @@ public:
 
 uint8_t heldModifiers = 0;
 
-volatile uint32_t lastTrigger = 0;
-volatile uint32_t lastTrigger2 = 0;
-
-volatile uint8_t keyBuffer[16];
-volatile uint8_t writePos = 0;
-volatile uint8_t readPos  = 0;
-
-void sendReport() { HID().SendReport(1, &report, sizeof(report)); }
+void sendReport() {
+  HID().SendReport(1, &report, sizeof(report));
+}
 
 void processSnapshot(uint8_t snapshot)
 {
@@ -95,37 +92,14 @@ void processSnapshot(uint8_t snapshot)
 
   switch (snapshot)
   {
-    case CMD_TOGGLE_LCTRL:
-      modifier = MOD_LCTRL;
-      break;
-
-    case CMD_TOGGLE_LSHIFT:
-      modifier = MOD_LSHIFT;
-      break;
-
-    case CMD_TOGGLE_LALT:
-      modifier = MOD_LALT;
-      break;
-
-    case CMD_TOGGLE_LGUI:
-      modifier = MOD_LGUI;
-      break;
-
-    case CMD_TOGGLE_RCTRL:
-      modifier = MOD_RCTRL;
-      break;
-
-    case CMD_TOGGLE_RSHIFT:
-      modifier = MOD_RSHIFT;
-      break;
-
-    case CMD_TOGGLE_RALT:
-      modifier = MOD_RALT;
-      break;
-
-    case CMD_TOGGLE_RGUI:
-      modifier = MOD_RGUI;
-      break;
+    case CMD_TOGGLE_LCTRL:  modifier = MOD_LCTRL;  break;
+    case CMD_TOGGLE_LSHIFT: modifier = MOD_LSHIFT; break;
+    case CMD_TOGGLE_LALT:   modifier = MOD_LALT;   break;
+    case CMD_TOGGLE_LGUI:   modifier = MOD_LGUI;   break;
+    case CMD_TOGGLE_RCTRL:  modifier = MOD_RCTRL;  break;
+    case CMD_TOGGLE_RSHIFT: modifier = MOD_RSHIFT; break;
+    case CMD_TOGGLE_RALT:   modifier = MOD_RALT;   break;
+    case CMD_TOGGLE_RGUI:   modifier = MOD_RGUI;   break;
   }
 
   if (modifier != 0)
@@ -137,7 +111,6 @@ void processSnapshot(uint8_t snapshot)
     return;
   }
 
-  
   leere();
   report.modifiers = heldModifiers;
   report.keys[0] = snapshot;
@@ -149,6 +122,20 @@ void processSnapshot(uint8_t snapshot)
   report.modifiers = heldModifiers;
   sendReport();
 }
+
+
+volatile uint8_t keyBuffer[16];
+volatile uint8_t writePos = 0;
+volatile uint8_t readPos  = 0;
+
+volatile bool trigger1Armed = true;
+volatile bool trigger2Armed = true;
+
+uint32_t trigger1HighSince = 0;
+uint32_t trigger2HighSince = 0;
+
+const uint32_t RELEASE_TIME = 10000;
+
 
 // Bit 0 = Pin 3   Bit 4 = Pin 7
 // Bit 1 = Pin 4   Bit 5 = Pin 8
@@ -173,42 +160,53 @@ inline uint8_t readKeys()
       | ((d & 0x80) >> 4)
       | ((e & 0x40) >> 2);
 
+
   return ~result;
 }
 
-inline void captureKeys() {
+
+void captureKeys()
+{
   uint8_t next = (writePos + 1) & 15;
-  if (next != readPos) {
+
+  if (next != readPos)
+  {
     keyBuffer[writePos] = readKeys();
     writePos = next;
   }
 }
 
-void pressed() {
-  uint32_t now = micros();
-  if (now - lastTrigger >= 10000) {
-    lastTrigger = now;
+
+void pressed()
+{
+  if (trigger1Armed)
+  {
+    trigger1Armed = false;
     captureKeys();
   }
 }
 
-void pressed2() {
-  uint32_t now = micros();
-  if (now - lastTrigger2 >= 10000) {
-    lastTrigger2 = now;
+void pressed2()
+{
+  if (trigger2Armed)
+  {
+    trigger2Armed = false;
     captureKeys();
   }
 }
 
-void setup() {
+// ___________________________________________________________________________________________________________________________________
+void setup()
+{
   report.modifiers = 0;
   report.reserved = 0;
   leere();
 
   pinMode(2, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(2), pressed, FALLING);
+  attachInterrupt(digitalPinToInterrupt(2), pressed2, FALLING);
+
   pinMode(1, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(1), pressed2, FALLING);
+  attachInterrupt(digitalPinToInterrupt(1), pressed, FALLING);
 
   pinMode(3,  INPUT_PULLUP);
   pinMode(4,  INPUT_PULLUP);
@@ -220,11 +218,63 @@ void setup() {
   pinMode(10, INPUT_PULLUP);
 }
 
-void loop() {
+void loop()
+{
+  uint32_t now = micros();
+
+  // Trigger re-arm
+  if (!trigger1Armed)
+  {
+    if (digitalRead(1) == HIGH)
+    {
+      if (trigger1HighSince == 0)
+        trigger1HighSince = now;
+      else if ((uint32_t)(now - trigger1HighSince) >= RELEASE_TIME)
+      {
+        noInterrupts();
+        if (digitalRead(1) == HIGH)
+        {
+          trigger1Armed = true;
+          trigger1HighSince = 0;
+        }
+        interrupts();
+      }
+    }
+    else
+    {
+      trigger1HighSince = 0;
+    }
+  }
+
+  if (!trigger2Armed)
+  {
+    if (digitalRead(2) == HIGH)
+    {
+      if (trigger2HighSince == 0)
+        trigger2HighSince = now;
+      else if ((uint32_t)(now - trigger2HighSince) >= RELEASE_TIME)
+      {
+        noInterrupts();
+        if (digitalRead(2) == HIGH)
+        {
+          trigger2Armed = true;
+          trigger2HighSince = 0;
+        }
+        interrupts();
+      }
+    }
+    else
+    {
+      trigger2HighSince = 0;
+    }
+  }
+
+  // Puffer arbeiten
   while (readPos != writePos)
   {
     uint8_t snapshot = keyBuffer[readPos];
     readPos = (readPos + 1) & 15;
+
     processSnapshot(snapshot);
   }
 }
