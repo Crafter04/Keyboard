@@ -1,4 +1,5 @@
 volatile uint32_t lastTrigger = 0;
+volatile uint32_t lastTrigger2 = 0;
 
 volatile uint8_t keyBuffer[16];
 volatile uint8_t writePos = 0;
@@ -27,16 +28,26 @@ inline void captureKeys() {
 void pressed() {
     uint32_t now = micros();
 
-    if (now - lastTrigger >= 10000) {// 10 ms Sperrzeit
+    if (now - lastTrigger >= 10000) {
         lastTrigger = now;
         captureKeys();
     }
 }
+
+void pressed2() {
+    uint32_t now = micros();
+
+    if (now - lastTrigger2 >= 10000) {
+        lastTrigger2 = now;
+        captureKeys();
+    }
+}
+
 void setup() {
   pinMode(2, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(2), pressed, FALLING);
   pinMode(1, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(1), pressed, FALLING);
+  attachInterrupt(digitalPinToInterrupt(1), pressed2, FALLING);
 
   pinMode(3,  INPUT_PULLUP);
   pinMode(4,  INPUT_PULLUP);
@@ -50,4 +61,6 @@ void setup() {
 
 void loop() {
   // todo Puffer abarbeiten und senden
+  
+  // kann der andere eigetnlich taste gedrückt halten wie wwwwwwwwwwwwwwww?
 }
