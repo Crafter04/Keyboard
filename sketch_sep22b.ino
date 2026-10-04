@@ -5,20 +5,22 @@ volatile uint8_t keyBuffer[16];
 volatile uint8_t writePos = 0;
 volatile uint8_t readPos  = 0;
 
-uint8_t readKeys() {
-    uint8_t result = 0;
+inline uint8_t readKeys() {
+    uint8_t d = PIND;
+    uint8_t c = PINC;
+    uint8_t e = PINE;
+    uint8_t b = PINB;
 
-    for (uint8_t i = 0; i < 8; i++) {
-        if (digitalRead(3 + i) == HIGH) {
-            result |= (1 << i);
-        }
-    }
-
-    return result;
+    return (b & 0x70)
+         | (d & 0x01)
+         | ((d & 0x10) >> 3)
+         | ((c & 0x40) >> 4)
+         | ((d & 0x80) >> 4)
+         | ((e & 0x40) >> 2);
 }
 
 inline void captureKeys() {
-    uint8_t next = (writePos + 1) % 16;
+    uint8_t next = (writePos + 1) & 15;
     if (next != readPos) {
         keyBuffer[writePos] = readKeys();
         writePos = next;
@@ -60,7 +62,12 @@ void setup() {
 }
 
 void loop() {
-  // todo Puffer abarbeiten und senden
+  // pin 3 bis 10
   
-  // kann der andere eigetnlich taste gedrückt halten wie wwwwwwwwwwwwwwww?
+  
+  // todo hier Puffer abarbeiten und senden
+
+  //ist alles pullup also falschrum? vielciht einmal byte konverten
+
+  // kann der andere eigetnlich taste gedrückt halten wie wwwwwwwwwwwwwwww? ne kann er nicht wäre auch schlecht auf dem controller der ist für tasten eingabe
 }
